@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test order cleanup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,400..700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #F5F6F8;
+    --surface: #FFFFFF;
+    --ink: #1A1C1F;
+    --muted: #5E6672;
+    --line: #DADDE2;
+    --bolt: #F2C230;
+    --bolt-ink: #1A1C1F;
+    --danger: #B3261E;
+    --danger-soft: #FBE9E7;
+    --safe: #1F6F5C;
+    --safe-soft: #E4F2EE;
+    --focus: #2B59C3;
+    --font: "Archivo", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #15171A;
+      --surface: #1E2125;
+      --ink: #ECEEF1;
+      --muted: #9AA3AE;
+      --line: #30343A;
+      --bolt: #F2C230;
+      --bolt-ink: #15171A;
+      --danger: #F2756A;
+      --danger-soft: #3A1F1D;
+      --safe: #5CC3A6;
+      --safe-soft: #17302A;
+      --focus: #8FB0FF;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: 16px;
+    line-height: 1.5;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
+  a { color: inherit; }
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+  /* Header */
+  .top { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
+  .mark {
+    width: 40px; height: 40px; border-radius: 9px; background: var(--bolt);
+    display: grid; place-items: center; flex: none;
+  }
+  .mark svg { width: 20px; height: 24px; fill: var(--bolt-ink); }
+  .top h1 { font-size: 22px; font-weight: 650; font-stretch: 87%; margin: 0; letter-spacing: -0.01em; }
+  .top .sub { color: var(--muted); font-size: 14px; margin: 0; }
+  .who { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
+  .who img { width: 26px; height: 26px; border-radius: 50%; }
+  .linkbtn {
+    background: none; border: 0; padding: 4px 2px; font: inherit; color: var(--ink);
+    text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+  }
+
+  /* The one bold element: the automatic-deletion band */
+  .band {
+    display: grid; grid-template-columns: 1fr auto; gap: 8px 24px; align-items: center;
+    padding: 26px 28px; border-radius: 12px; background: var(--surface);
+    border: 1px solid var(--line); position: relative; overflow: hidden;
+  }
+  .band::before {
+    content: ""; position: absolute; inset: 0 auto 0 0; width: 8px; background: var(--line);
+    transition: background .2s;
+  }
+  .band.on::before { background: var(--bolt); }
+  .band h2 { margin: 0; font-size: 30px; line-height: 1.15; font-weight: 700; font-stretch: 80%; letter-spacing: -0.015em; }
+  .band p { margin: 0; color: var(--muted); max-width: 52ch; }
+  .switch {
+    grid-row: span 2; width: 76px; height: 42px; border-radius: 21px; border: 0; padding: 0;
+    background: var(--line); position: relative; cursor: pointer; transition: background .2s;
+  }
+  .switch::after {
+    content: ""; position: absolute; top: 5px; left: 5px; width: 32px; height: 32px; border-radius: 50%;
+    background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .2s;
+  }
+  .switch[aria-checked="true"] { background: var(--bolt); }
+  .switch[aria-checked="true"]::after { transform: translateX(34px); }
+  .switch:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* Schedule row */
+  .schedule {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+    padding: 16px 28px 0; color: var(--muted);
+  }
+  .schedule label { color: var(--ink); font-weight: 550; }
+  select, input[type=text], input[type=number], input[type=password] {
+    font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; min-height: 40px;
+  }
+  select { padding-right: 28px; }
+
+  section { margin-top: 44px; }
+  section > h3 { font-size: 19px; font-weight: 650; font-stretch: 90%; margin: 0 0 4px; }
+  section > .hint { color: var(--muted); margin: 0 0 18px; font-size: 15px; max-width: 62ch; }
+
+  .fields { display: grid; grid-template-columns: 1fr 110px 110px; gap: 14px; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: 14px; font-weight: 550; }
+  .field small { color: var(--muted); font-size: 13px; }
+  .field input { width: 100%; }
+  .field.bad input { border-color: var(--danger); }
+  .field .err { color: var(--danger); font-size: 13px; }
+
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+  .btn {
+    font: inherit; font-weight: 600; border-radius: 8px; padding: 11px 18px; cursor: pointer;
+    border: 1px solid var(--ink); background: var(--surface); color: var(--ink); min-height: 44px;
+  }
+  .btn.primary { background: var(--ink); color: var(--surface); }
+  .btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+  @media (prefers-color-scheme: dark) { .btn.danger { color: #1E2125; } }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* Runs */
+  .runs { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--line); }
+  .runs li {
+    display: grid; grid-template-columns: 112px 1fr auto; gap: 4px 16px; align-items: baseline;
+    padding: 14px 0; border-bottom: 1px solid var(--line);
+  }
+  .runs .when { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+  .runs .title { font-weight: 550; }
+  .runs .title small { display: block; font-weight: 400; color: var(--muted); font-size: 13px; }
+  .pill { font-size: 13px; font-weight: 600; padding: 2px 10px; border-radius: 999px; white-space: nowrap; }
+  .pill.ok { background: var(--safe-soft); color: var(--safe); }
+  .pill.fail { background: var(--danger-soft); color: var(--danger); }
+  .pill.wait { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+  .empty { color: var(--muted); padding: 18px 0; }
+
+  /* Messages */
+  .notice {
+    margin-top: 18px; padding: 12px 16px; border-radius: 8px; font-size: 15px;
+    background: var(--safe-soft); color: var(--safe);
+  }
+  .notice.error { background: var(--danger-soft); color: var(--danger); }
+  .notice[hidden] { display: none; }
+
+  /* Setup */
+  .setup { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 26px 28px; }
+  .setup h2 { margin: 0 0 6px; font-size: 24px; font-stretch: 85%; }
+  .setup p { margin: 0 0 16px; color: var(--muted); max-width: 62ch; }
+  .setup .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .setup .grid .wide { grid-column: span 2; }
+  .setup details { margin-top: 18px; color: var(--muted); font-size: 15px; }
+  .setup details summary { cursor: pointer; color: var(--ink); font-weight: 550; }
+  .setup ol { padding-left: 20px; }
+  .setup li { margin: 4px 0; }
+  .check { display: flex; gap: 8px; align-items: center; font-size: 14px; color: var(--muted); margin-top: 12px; }
+
+  dialog {
+    border: 1px solid var(--line); border-radius: 12px; padding: 24px; max-width: 440px;
+    background: var(--surface); color: var(--ink);
+  }
+  dialog::backdrop { background: rgba(10, 12, 15, .45); }
+  dialog h4 { margin: 0 0 8px; font-size: 20px; }
+  dialog p { margin: 0 0 18px; color: var(--muted); }
+  dialog .actions { justify-content: flex-end; margin-top: 0; }
+
+  [hidden] { display: none !important; }
+
+  @media (max-width: 620px) {
+    main { padding-top: 20px; }
+    .band { grid-template-columns: 1fr; padding: 22px 22px 22px 26px; }
+    .switch { grid-row: auto; }
+    .band h2 { font-size: 25px; }
+    .schedule { padding: 14px 4px 0; }
+    .fields { grid-template-columns: 1fr 1fr; }
+    .fields .field:first-child { grid-column: span 2; }
+    .runs li { grid-template-columns: 1fr auto; }
+    .runs .when { grid-column: span 2; }
+    .setup .grid { grid-template-columns: 1fr; }
+    .setup .grid .wide { grid-column: auto; }
+    .who span { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .switch, .switch::after, .band::before { transition: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 20 24"><path d="M12.5 0 0 14h8l-2 10L20 9h-8.2z"/></svg>
+    </div>
+    <div>
+      <h1>Test order cleanup</h1>
+      <p class="sub" id="repoLabel">Removes internal test orders from Shopify and Zoho</p>
+    </div>
+    <div class="who" id="who" hidden>
+      <img id="avatar" alt="">
+      <span id="login"></span>
+      <button class="linkbtn" id="signOut" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <!-- First-time setup -->
+  <div class="setup" id="setup" hidden>
+    <h2>Connect to GitHub</h2>
+    <p>The cleanup runs on GitHub. Sign in with a GitHub access token so this page can start runs and change settings for you. Your token stays in this browser.</p>
+    <div class="grid">
+      <div class="field">
+        <label for="owner">Repository owner</label>
+        <input type="text" id="owner" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="repo">Repository name</label>
+        <input type="text" id="repo" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field wide">
+        <label for="token">GitHub access token</label>
+        <input type="password" id="token" autocomplete="off" spellcheck="false" placeholder="github_pat_… or ghp_…">
+      </div>
+    </div>
+    <label class="check"><input type="checkbox" id="remember"> Remember me on this computer</label>
+    <div class="actions"><button class="btn primary" id="connect" type="button">Connect</button></div>
+    <div class="notice error" id="setupError" hidden></div>
+    <details>
+      <summary>How to create a token</summary>
+      <ol>
+        <li>On github.com, open your profile picture, then Settings, then Developer settings, then Personal access tokens.</li>
+        <li><strong>If the repository belongs to an organization</strong> (recommended): choose Fine-grained tokens, Generate new token. Set Resource owner to the organization, pick only this repository, and give these repository permissions: Actions read and write, Variables read and write, Contents read. Add Contents and Workflows read and write only if you will change the schedule.</li>
+        <li><strong>If the repository is in someone's personal account</strong>: choose Tokens (classic), Generate new token, and tick the repo and workflow scopes.</li>
+        <li>You also need to be a collaborator on the repository with at least Write access.</li>
+      </ol>
+    </details>
+  </div>
+
+  <!-- Control panel -->
+  <div id="panel" hidden>
+    <div class="band" id="band">
+      <h2 id="autoTitle">Automatic deletion is off</h2>
+      <button class="switch" id="autoSwitch" role="switch" aria-checked="false" aria-labelledby="autoTitle" type="button"></button>
+      <p id="autoText">Scheduled runs only report what they would delete. Nothing is removed until you turn this on.</p>
+    </div>
+    <div class="schedule">
+      <label for="every">Runs every</label>
+      <select id="every">
+        <option value="1">1 hour</option>
+        <option value="2">2 hours</option>
+        <option value="3">3 hours</option>
+        <option value="4">4 hours</option>
+        <option value="6">6 hours</option>
+        <option value="8">8 hours</option>
+        <option value="12">12 hours</option>
+        <option value="24">24 hours</option>
+      </select>
+      <button class="btn" id="saveEvery" type="button" hidden>Save schedule</button>
+      <span id="nextRun"></span>
+    </div>
+
+    <div class="notice" id="notice" hidden></div>
+
+    <section>
+      <h3>Run now</h3>
+      <p class="hint">Preview shows what would be deleted without touching anything. Delete removes the matching test orders straight away. Phone numbers here apply to this run only.</p>
+      <div class="fields">
+        <div class="field" id="phonesField">
+          <label for="phones">Test phone numbers</label>
+          <input type="text" id="phones" inputmode="tel" placeholder="9876543210, 9123456789" autocomplete="off">
+          <small>Optional. Separate numbers with commas.</small>
+          <span class="err" id="phonesErr" hidden></span>
+        </div>
+        <div class="field">
+          <label for="days">Days back</label>
+          <input type="number" id="days" min="1" max="365" value="7">
+        </div>
+        <div class="field">
+          <label for="max">Stop after</label>
+          <input type="number" id="max" min="1" max="1000" value="50">
+          <small>orders</small>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="preview" type="button">Preview</button>
+        <button class="btn danger" id="deleteNow" type="button">Delete test orders now</button>
+      </div>
+    </section>
+
+    <section>
+      <h3>Recent runs</h3>
+      <p class="hint">Open a run to see exactly which orders it found or deleted.</p>
+      <ul class="runs" id="runs"><li class="empty">Loading runs…</li></ul>
+    </section>
+  </div>
+</main>
+
+<dialog id="confirm">
+  <h4 id="confirmTitle"></h4>
+  <p id="confirmText"></p>
+  <div class="actions">
+    <button class="btn" id="confirmCancel" type="button">Cancel</button>
+    <button class="btn danger" id="confirmOk" type="button"></button>
+  </div>
+</dialog>
+
+<script>
+(function () {
+  "use strict";
+
+  // Defaults for HomeRun. People can change them on the setup screen.
+  const DEFAULT_OWNER = "anushkashukla-cpu";
+  const DEFAULT_REPO = "Test_Orders_Cleanup";
+  const WORKFLOW_FILE = "cleanup.yml";
+  const WORKFLOW_PATH = ".github/workflows/" + WORKFLOW_FILE;
+  const BRANCH = "main";
+  const STORE_KEY = "testOrderCleanupControl";
+
+  const $ = (id) => document.getElementById(id);
+  let cfg = { owner: DEFAULT_OWNER, repo: DEFAULT_REPO, token: "" };
+  let dryRunValue = "true";
+  let savedEvery = null;
+  let pollTimer = null;
+
+  // ---------- storage ----------
+  function loadSaved() {
+    try {
+      const raw = localStorage.getItem(STORE_KEY) || sessionStorage.getItem(STORE_KEY);
+      if (raw) Object.assign(cfg, JSON.parse(raw));
+    } catch (e) { /* storage unavailable: stay signed out */ }
+  }
+  function save(remember) {
+    const raw = JSON.stringify(cfg);
+    try {
+      localStorage.removeItem(STORE_KEY);
+      sessionStorage.removeItem(STORE_KEY);
+      (remember ? localStorage : sessionStorage).setItem(STORE_KEY, raw);
+    } catch (e) { /* not fatal */ }
+  }
+  function forget() {
+    try { localStorage.removeItem(STORE_KEY); sessionStorage.removeItem(STORE_KEY); } catch (e) {}
+  }
+
+  // ---------- GitHub API ----------
+  async function api(path, opts = {}) {
+    let res;
+    try {
+      res = await rawFetch(path, opts);
+    } catch (e) {
+      const err = new Error(
+        "Couldn't reach GitHub. If this page is open inside Claude, GitHub or an email preview, download the file and open it directly in Chrome. " +
+        "Otherwise an ad blocker, VPN or company network may be blocking api.github.com: try an Incognito window or another network.");
+      err.status = 0;
+      throw err;
+    }
+    return handle(res, opts);
+  }
+  function rawFetch(path, opts) {
+    return fetch("https://api.github.com" + path, {
+      method: opts.method || "GET",
+      headers: {
+        "Accept": "application/vnd.github+json",
+        "Authorization": "Bearer " + cfg.token,
+        "X-GitHub-Api-Version": "2022-11-28",
+        ...(opts.body ? { "Content-Type": "application/json" } : {})
+      },
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    });
+  }
+  async function handle(res, opts) {
+    if (res.status === 204) return null;
+    let data = null;
+    try { data = await res.json(); } catch (e) {}
+    if (!res.ok) {
+      const err = new Error(explain(res.status, data && data.message, opts.what));
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  }
+  function explain(status, message, what) {
+    const action = what || "do that";
+    if (status === 401) return "GitHub rejected the token. Sign out and connect again with a valid token.";
+    if (status === 403) return "Your token isn't allowed to " + action + ". " + (message || "") + " Check the token's permissions.";
+    if (status === 404) return "GitHub couldn't find the repository, or your token can't " + action + ". Check the owner, repository name and token permissions.";
+    if (status === 422) return "GitHub refused the request: " + (message || "invalid input") + ".";
+    return "GitHub returned an error (" + status + "): " + (message || "unknown error") + ".";
+  }
+  const repoPath = () => "/repos/" + encodeURIComponent(cfg.owner) + "/" + encodeURIComponent(cfg.repo);
+
+  // ---------- base64 (UTF-8 safe) ----------
+  function b64decode(s) {
+    const bin = atob(s.replace(/\s/g, ""));
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  }
+  function b64encode(s) {
+    const bytes = new TextEncoder().encode(s);
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+
+  // ---------- messages ----------
+  function notify(text, isError) {
+    const n = $("notice");
+    n.textContent = text;
+    n.classList.toggle("error", !!isError);
+    n.hidden = false;
+    if (!isError) setTimeout(() => { if (n.textContent === text) n.hidden = true; }, 8000);
+  }
+  function confirmBox(title, text, okLabel) {
+    return new Promise((resolve) => {
+      const d = $("confirm");
+      $("confirmTitle").textContent = title;
+      $("confirmText").textContent = text;
+      $("confirmOk").textContent = okLabel;
+      const done = (v) => { d.close(); $("confirmOk").onclick = $("confirmCancel").onclick = null; resolve(v); };
+      $("confirmOk").onclick = () => done(true);
+      $("confirmCancel").onclick = () => done(false);
+      d.oncancel = () => resolve(false);
+      d.showModal();
+      $("confirmCancel").focus();
+    });
+  }
+
+  // ---------- automatic deletion (repo variable DRY_RUN) ----------
+  async function loadDryRun() {
+    try {
+      const v = await api(repoPath() + "/actions/variables/DRY_RUN", { what: "read repository variables" });
+      dryRunValue = (v.value || "true").trim().toLowerCase();
+    } catch (e) {
+      if (e.status === 404) dryRunValue = "true"; else throw e;
+    }
+    renderAuto();
+  }
+  function renderAuto() {
+    const on = dryRunValue === "false";
+    $("autoSwitch").setAttribute("aria-checked", String(on));
+    $("band").classList.toggle("on", on);
+    $("autoTitle").textContent = on ? "Automatic deletion is on" : "Automatic deletion is off";
+    $("autoText").textContent = on
+      ? "Every scheduled run permanently deletes the test orders it finds in Shopify and Zoho."
+      : "Scheduled runs only report what they would delete. Nothing is removed until you turn this on.";
+  }
+  async function toggleAuto() {
+    const turningOn = dryRunValue !== "false";
+    if (turningOn) {
+      const ok = await confirmBox("Turn on automatic deletion?",
+        "Every scheduled run will permanently delete matching test orders from Shopify and Zoho. Deleted orders can't be restored.",
+        "Turn on");
+      if (!ok) return;
+    }
+    const value = turningOn ? "false" : "true";
+    $("autoSwitch").disabled = true;
+    try {
+      try {
+        await api(repoPath() + "/actions/variables/DRY_RUN", { method: "PATCH", body: { name: "DRY_RUN", value }, what: "change repository variables" });
+      } catch (e) {
+        if (e.status !== 404) throw e;
+        await api(repoPath() + "/actions/variables", { method: "POST", body: { name: "DRY_RUN", value }, what: "create repository variables" });
+      }
+      dryRunValue = value;
+      renderAuto();
+      notify(turningOn ? "Automatic deletion turned on." : "Automatic deletion turned off. Scheduled runs will only report.");
+    } catch (e) {
+      notify(e.message, true);
+    } finally {
+      $("autoSwitch").disabled = false;
+    }
+  }
+
+  // ---------- schedule (cron line in the workflow file) ----------
+  function cronToHours(cron) {
+    const p = cron.trim().split(/\s+/);
+    if (p.length !== 5 || p[2] !== "*" || p[3] !== "*" || p[4] !== "*") return null;
+    if (p[1] === "*") return 1;
+    const m = p[1].match(/^\*\/(\d+)$/);
+    if (m) return Number(m[1]);
+    if (/^\d+$/.test(p[1])) return 24;
+    return null;
+  }
+  function hoursToCron(h) {
+    if (h === 1) return "17 * * * *";
+    if (h === 24) return "17 0 * * *";
+    return "17 */" + h + " * * *";
+  }
+  async function getWorkflowFile() {
+    const f = await api(repoPath() + "/contents/" + WORKFLOW_PATH + "?ref=" + BRANCH, { what: "read the workflow file" });
+    return { sha: f.sha, text: b64decode(f.content) };
+  }
+  async function loadSchedule() {
+    try {
+      const { text } = await getWorkflowFile();
+      const m = text.match(/cron:\s*["']([^"']+)["']/);
+      savedEvery = m ? cronToHours(m[1]) : null;
+      if (savedEvery) $("every").value = String(savedEvery);
+      renderNext();
+    } catch (e) {
+      $("nextRun").textContent = "Couldn't read the schedule: " + e.message;
+    }
+  }
+  function renderNext() {
+    const sel = Number($("every").value);
+    $("saveEvery").hidden = sel === savedEvery;
+    if (!savedEvery) { $("nextRun").textContent = ""; return; }
+    // Next run: next UTC hour divisible by the interval, at :17.
+    const now = new Date();
+    const t = new Date(now);
+    t.setUTCMinutes(17, 0, 0);
+    if (t <= now) t.setUTCHours(t.getUTCHours() + 1);
+    let guard = 0;
+    while ((savedEvery === 24 ? t.getUTCHours() !== 0 : t.getUTCHours() % savedEvery !== 0) && guard++ < 48) {
+      t.setUTCHours(t.getUTCHours() + 1);
+    }
+    const time = t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    $("nextRun").textContent = "Next run around " + time + " (GitHub can start a few minutes late).";
+  }
+  async function saveSchedule() {
+    const h = Number($("every").value);
+    $("saveEvery").disabled = true;
+    try {
+      const { sha, text } = await getWorkflowFile();
+      if (!/cron:\s*["'][^"']+["']/.test(text)) throw new Error("The workflow file has no schedule line to update.");
+      const updated = text.replace(/cron:\s*["'][^"']+["']/, 'cron: "' + hoursToCron(h) + '"');
+      await api(repoPath() + "/contents/" + WORKFLOW_PATH, {
+        method: "PUT",
+        what: "change the schedule (needs Contents and Workflows write access)",
+        body: {
+          message: "Set test order cleanup to run every " + h + (h === 1 ? " hour" : " hours"),
+          content: b64encode(updated),
+          sha,
+          branch: BRANCH
+        }
+      });
+      savedEvery = h;
+      renderNext();
+      notify("Schedule saved: runs every " + h + (h === 1 ? " hour." : " hours."));
+    } catch (e) {
+      notify(e.message, true);
+    } finally {
+      $("saveEvery").disabled = false;
+    }
+  }
+
+  // ---------- run now ----------
+  function parsePhones() {
+    const raw = $("phones").value.trim();
+    const field = $("phonesField");
+    const err = $("phonesErr");
+    field.classList.remove("bad");
+    err.hidden = true;
+    if (!raw) return { ok: true, value: "" };
+    const parts = raw.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean);
+    const bad = parts.filter((p) => (p.match(/\d/g) || []).length < 10);
+    if (bad.length) {
+      field.classList.add("bad");
+      err.textContent = "Not a 10-digit phone number: " + bad.join(", ");
+      err.hidden = false;
+      return { ok: false };
+    }
+    return { ok: true, value: parts.join(", ") };
+  }
+  function intIn(id, lo, hi, fallback) {
+    const n = parseInt($(id).value, 10);
+    return Number.isFinite(n) && n >= lo && n <= hi ? n : fallback;
+  }
+  async function runNow(dryRun) {
+    const phones = parsePhones();
+    if (!phones.ok) { $("phones").focus(); return; }
+    const days = intIn("days", 1, 365, 7);
+    const max = intIn("max", 1, 1000, 50);
+    if (!dryRun) {
+      const ok = await confirmBox("Delete test orders now?",
+        "This permanently deletes up to " + max + " matching test orders from the last " + days + " days in Shopify and Zoho" +
+        (phones.value ? ", including orders from " + phones.value : "") + ". Deleted orders can't be restored.",
+        "Delete test orders");
+      if (!ok) return;
+    }
+    const btns = [$("preview"), $("deleteNow")];
+    btns.forEach((b) => (b.disabled = true));
+    try {
+      await api(repoPath() + "/actions/workflows/" + WORKFLOW_FILE + "/dispatches", {
+        method: "POST",
+        what: "start runs (needs Actions write access)",
+        body: {
+          ref: BRANCH,
+          inputs: {
+            dry_run: dryRun ? "true" : "false",
+            lookback_days: String(days),
+            max_deletions: String(max),
+            phone_numbers: phones.value
+          }
+        }
+      });
+      notify(dryRun ? "Preview started. It appears in Recent runs within a few seconds." : "Delete started. It appears in Recent runs within a few seconds.");
+      setTimeout(loadRuns, 3000);
+      startPolling();
+    } catch (e) {
+      notify(e.message, true);
+    } finally {
+      btns.forEach((b) => (b.disabled = false));
+    }
+  }
+
+  // ---------- recent runs ----------
+  function statusPill(run) {
+    if (run.status !== "completed") return '<span class="pill wait">' + (run.status === "queued" ? "Waiting" : "Running") + "</span>";
+    if (run.conclusion === "success") return '<span class="pill ok">Finished</span>';
+    if (run.conclusion === "cancelled") return '<span class="pill wait">Cancelled</span>';
+    return '<span class="pill fail">Needs attention</span>';
+  }
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  function whenLabel(iso) {
+    const d = new Date(iso);
+    const today = new Date();
+    const sameDay = d.toDateString() === today.toDateString();
+    const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return sameDay ? "Today, " + time : d.toLocaleDateString([], { day: "numeric", month: "short" }) + ", " + time;
+  }
+  async function loadRuns() {
+    try {
+      const data = await api(repoPath() + "/actions/workflows/" + WORKFLOW_FILE + "/runs?per_page=12", { what: "read runs" });
+      const runs = data.workflow_runs || [];
+      const list = $("runs");
+      if (!runs.length) {
+        list.innerHTML = '<li class="empty">No runs yet. Start a preview to see what would be deleted.</li>';
+        return runs;
+      }
+      list.innerHTML = runs.map((r) => {
+        const failed = r.status === "completed" && r.conclusion !== "success" && r.conclusion !== "cancelled";
+        return "<li>" +
+          '<span class="when">' + esc(whenLabel(r.created_at)) + "</span>" +
+          '<span class="title"><a href="' + esc(r.html_url) + '" target="_blank" rel="noopener">' + esc(r.display_title || r.name) + "</a>" +
+          (failed ? "<small>Open the run to see the error.</small>" : "") + "</span>" +
+          statusPill(r) +
+          "</li>";
+      }).join("");
+      return runs;
+    } catch (e) {
+      $("runs").innerHTML = '<li class="empty">' + esc(e.message) + "</li>";
+      return [];
+    }
+  }
+  function startPolling() {
+    clearInterval(pollTimer);
+    let ticks = 0;
+    pollTimer = setInterval(async () => {
+      const runs = await loadRuns();
+      const active = runs.some((r) => r.status !== "completed");
+      if ((!active && ticks > 2) || ++ticks > 60) clearInterval(pollTimer);
+    }, 10000);
+  }
+
+  // ---------- connect ----------
+  async function connect() {
+    const err = $("setupError");
+    err.hidden = true;
+    cfg.owner = $("owner").value.trim();
+    cfg.repo = $("repo").value.trim();
+    cfg.token = $("token").value.replace(/\s+/g, "");
+    if (!cfg.owner || !cfg.repo || !cfg.token) {
+      err.textContent = "Fill in the repository owner, repository name and token.";
+      err.hidden = false;
+      return;
+    }
+    $("connect").disabled = true;
+    try {
+      await api(repoPath(), { what: "open this repository" });
+      save($("remember").checked);
+      await showPanel();
+    } catch (e) {
+      err.textContent = e.message;
+      err.hidden = false;
+    } finally {
+      $("connect").disabled = false;
+    }
+  }
+  async function showPanel() {
+    $("setup").hidden = true;
+    $("panel").hidden = false;
+    $("repoLabel").textContent = cfg.owner + "/" + cfg.repo;
+    try {
+      const me = await api("/user", { what: "read your profile" });
+      $("login").textContent = me.login;
+      $("avatar").src = me.avatar_url;
+      $("who").hidden = false;
+    } catch (e) { /* profile is optional */ }
+    try { await loadDryRun(); } catch (e) { notify(e.message, true); $("autoSwitch").disabled = true; }
+    loadSchedule();
+    const runs = await loadRuns();
+    if (runs.some((r) => r.status !== "completed")) startPolling();
+  }
+  function showSetup() {
+    $("panel").hidden = true;
+    $("who").hidden = true;
+    $("setup").hidden = false;
+    $("owner").value = cfg.owner || DEFAULT_OWNER;
+    $("repo").value = cfg.repo || DEFAULT_REPO;
+    $("token").value = "";
+    $("repoLabel").textContent = "Removes internal test orders from Shopify and Zoho";
+  }
+
+  // ---------- wire up ----------
+  $("connect").addEventListener("click", connect);
+  $("token").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+  $("signOut").addEventListener("click", () => { forget(); cfg.token = ""; clearInterval(pollTimer); showSetup(); });
+  $("autoSwitch").addEventListener("click", toggleAuto);
+  $("every").addEventListener("change", renderNext);
+  $("saveEvery").addEventListener("click", saveSchedule);
+  $("preview").addEventListener("click", () => runNow(true));
+  $("deleteNow").addEventListener("click", () => runNow(false));
+  $("phones").addEventListener("input", () => { $("phonesField").classList.remove("bad"); $("phonesErr").hidden = true; });
+
+  loadSaved();
+  if (cfg.token) showPanel(); else showSetup();
+})();
+</script>
+</body>
+</html>
