@@ -47,6 +47,10 @@
   .btn:disabled { opacity: .5; cursor: not-allowed; }
   .fine { color: var(--muted); font-size: 14px; margin: 0; }
 
+  .ask { margin-top: 20px; background: var(--surface); border: 1px solid var(--line); border-left: 8px solid var(--bolt); }
+  .ask h2 { margin: 0; font-size: 22px; font-stretch: 88%; }
+  .ask p { margin: 0; color: var(--muted); }
+  .btn.primary { background: var(--ink); color: var(--surface); justify-self: start; }
   .msg { margin-top: 20px; padding: 14px 16px; border-radius: 8px; background: var(--danger-soft); color: var(--danger); }
   .status { margin-top: 28px; }
   .status h2 { margin: 0 0 6px; font-size: 22px; font-stretch: 88%; }
@@ -79,13 +83,18 @@
     <div class="mark" aria-hidden="true"><svg viewBox="0 0 20 24"><path d="M12.5 0 0 14h8l-2 10L20 9h-8.2z"/></svg></div>
     <h1>Delete my test orders</h1>
   </header>
-  <p class="lede">Enter the phone number you tested with and the day you started. Your test orders are removed from Shopify and Zoho, and you'll see each one below.</p>
+  <p class="lede">Enter your name, the phone number you tested with, and the day you started. Your test orders are removed from Shopify and Zoho, and you'll see each one below. No login needed.</p>
 
   <form id="form" novalidate>
     <div class="field">
+      <label for="name">Your name</label>
+      <input id="name" type="text" autocomplete="name" placeholder="e.g. Himanshu Sharma" required>
+      <small>Saved with the deletion, so the admin can see who removed which orders.</small>
+    </div>
+    <div class="field">
       <label for="phone">Phone number</label>
       <input id="phone" type="tel" inputmode="tel" autocomplete="tel-national" placeholder="9876543210" required>
-      <small>Only numbers the admin has approved work here. Use commas for up to 3 numbers.</small>
+      <small>Use commas for up to 3 numbers. A number used for the first time needs the admin's approval.</small>
     </div>
     <div class="field">
       <label for="since">Delete test orders placed since</label>
@@ -97,6 +106,12 @@
   </form>
 
   <div class="msg" id="error" role="alert" hidden></div>
+
+  <form class="ask" id="ask" novalidate hidden>
+    <h2 id="askTitle">This number isn't approved yet</h2>
+    <p>The first time a number is used, the admin approves it. Once they do, your test orders are deleted automatically and the results show on this page.</p>
+    <button class="btn primary" id="askGo" type="submit">Ask the admin to approve</button>
+  </form>
 
   <div class="status" id="status" aria-live="polite" hidden>
     <h2 id="statusTitle"></h2>
@@ -163,7 +178,7 @@
     let res;
     try { res = await fetch(url, opts); } catch { throw new Error("Couldn't reach the website. Check your connection and try again."); }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Something went wrong (" + res.status + ").");
+    if (!res.ok) { const e = new Error(data.error || "Something went wrong (" + res.status + ")."); e.code = data.code; throw e; }
     return data;
   }
 
@@ -205,16 +220,60 @@
     setStatus("This is taking longer than usual", "It may still finish. Check again in a few minutes, or ask the admin.", false);
   }
 
+  let pendingAsk = null; // { name, phone, since }
+  try { $("name").value = localStorage.getItem("cleanupName") || ""; } catch {}
+
+  async function waitForApproval(approvalId) {
+    setStatus("Request sent to the admin", "Keep this page open or bookmark it. As soon as it's approved, your test orders are deleted and the results appear here.", true);
+    const started = Date.now();
+    while (Date.now() - started < 3 * 3600000) {
+      await new Promise((r) => setTimeout(r, 10000));
+      let s;
+      try { s = await api("/api/public?a=approval&id=" + encodeURIComponent(approvalId)); } catch (e) { continue; }
+      if (s.state === "pending") continue;
+      history.replaceState(null, "", "/");
+      if (s.state === "rejected") { setStatus("The admin declined this request", "Ask them directly if you think this is a mistake.", false); return; }
+      setStatus("Approved", "Deleting your test orders now.", true);
+      await poll(s.requestId);
+      return;
+    }
+    setStatus("Still waiting for the admin", "Come back to this page later, or ask the admin directly.", false);
+  }
+
+  $("ask").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    showError("");
+    const name = pendingAsk.name;
+    $("askGo").disabled = true;
+    try {
+      const r = await api("/api/public?a=request", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: pendingAsk.phone, name, since: pendingAsk.since }),
+      });
+      $("ask").hidden = true;
+      history.replaceState(null, "", "/?approval=" + encodeURIComponent(r.approvalId));
+      await waitForApproval(r.approvalId);
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      $("askGo").disabled = false;
+    }
+  });
+
   $("form").addEventListener("submit", async (e) => {
     e.preventDefault();
     showError("");
+    $("ask").hidden = true;
+    const name = $("name").value.trim();
     const phone = $("phone").value.trim();
     const since = $("since").value;
+    if (name.length < 2) { showError("Enter your name."); $("name").focus(); return; }
+    try { localStorage.setItem("cleanupName", name); } catch {}
     if (!phone) { showError("Enter your phone number."); $("phone").focus(); return; }
     const bad = phone.split(/[,;]+/).map((p) => p.trim()).filter((p) => p && (p.match(/\d/g) || []).length < 10);
     if (bad.length) { showError("Not a 10-digit phone number: " + bad.join(", ")); $("phone").focus(); return; }
     if (!since) { showError("Pick a date."); $("since").focus(); return; }
-    const ok = await ask("This permanently deletes test orders from " + phone + " placed since " + prettyDate(since) + ", in Shopify and Zoho.");
+    const ok = await ask("This permanently deletes test orders from " + phone + " placed since " + prettyDate(since) + ", in Shopify and Zoho. It's recorded as deleted by " + name + ".");
     if (!ok) return;
     $("go").disabled = true;
     $("results").hidden = true;
@@ -222,17 +281,30 @@
     try {
       const r = await api("/api/public?a=delete", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone, since }),
+        body: JSON.stringify({ name, phone, since }),
       });
       setStatus("Waiting to start…", "GitHub usually starts within a minute.", true);
       await poll(r.requestId);
     } catch (err) {
       $("status").hidden = true;
-      showError(err.message);
+      if (err.code === "not_approved") {
+        const one = phone.split(/[,;]+/).map((p) => p.trim()).filter(Boolean);
+        if (one.length > 1) { showError(err.message + " Request approval for one number at a time."); return; }
+        pendingAsk = { name, phone: one[0], since };
+        $("askTitle").textContent = one[0] + " isn't approved yet";
+        $("ask").hidden = false;
+        $("askGo").focus();
+      } else {
+        showError(err.message);
+      }
     } finally {
       $("go").disabled = false;
     }
   });
+
+  // Coming back to a bookmarked request
+  const resume = new URLSearchParams(location.search).get("approval");
+  if (resume && /^\d+-[0-9a-f]{16}$/.test(resume)) waitForApproval(resume);
 })();
 </script>
 </body>

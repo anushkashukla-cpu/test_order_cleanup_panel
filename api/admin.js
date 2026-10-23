@@ -1,11 +1,12 @@
 // Admin API. Every action needs a signed-in GitHub user with Write access to
 // the cleanup repository, and acts as that user (so runs show who started them).
-import { query, body, send, checkSince, requestId } from "../lib/http.js";
+import { query, body, send, checkSince, requestId, cleanName } from "../lib/http.js";
 import { getSession, requireAdmin, endSession } from "../lib/session.js";
 import {
   permissions, dispatch, listRuns, findRunByRequest, runState, readReport,
   getFile, putFile, getVariable, setVariable, readSchedule, writeSchedule,
   ALLOWED_HOURS, WORKFLOW_PATH, ACCOUNTS_PATH, GhError,
+  listHistory, openRequests, getRequest, closeRequest,
 } from "../lib/github.js";
 import { normalizePhone, splitPhones, readList, writeList } from "../lib/phones.js";
 
@@ -27,6 +28,9 @@ export default async function handler(req, res) {
       "GET report": report,
       "GET numbers": numbersGet,
       "POST numbers": numbersPost,
+      "GET requests": requestsGet,
+      "POST requests": requestsPost,
+      "GET history": history,
     };
     const fn = routes[req.method + " " + a];
     if (!fn) return send(res, 404, { error: "Unknown action." });
@@ -157,4 +161,64 @@ async function numbersPost(req, res, s) {
   }
   await putFile(s.token, ACCOUNTS_PATH, writeList(f.text, SELF_SERVICE_KEY, next), f.sha, message);
   return numbersGet(req, res, s);
+}
+
+async function requestsGet(req, res, s) {
+  const open = await openRequests(s.token);
+  return send(res, 200, {
+    requests: open.map(({ issue, req: r }) => ({
+      issue: issue.number, name: r.name, phone: r.phone, since: r.since, at: r.at || issue.created_at, url: issue.html_url,
+    })),
+  });
+}
+
+async function requestsPost(req, res, s) {
+  const b = await body(req);
+  const n = Number(b.issue);
+  if (!Number.isInteger(n) || n <= 0) return send(res, 400, { error: "Bad request number." });
+  const { issue, req: r } = await getRequest(s.token, n);
+  if (!r) return send(res, 404, { error: "That isn't an approval request." });
+  if (issue.state !== "open") return send(res, 409, { error: "This request was already handled." });
+
+  if (b.action === "reject") {
+    await closeRequest(s.token, n, "Rejected by @" + s.login + " on the admin page.", null, "not_planned");
+    return requestsGet(req, res, s);
+  }
+  if (b.action !== "approve") return send(res, 400, { error: "Unknown action." });
+
+  const phone = normalizePhone(r.phone);
+  if (!phone) return send(res, 400, { error: "The request has no valid phone number." });
+  // 1. add the number to the approved list (keeps the person's name next to it)
+  const f = await getFile(s.token, ACCOUNTS_PATH);
+  const items = readList(f.text, SELF_SERVICE_KEY);
+  if (!items.some((x) => normalizePhone(x.value) === phone)) {
+    await putFile(s.token, ACCOUNTS_PATH, writeList(f.text, SELF_SERVICE_KEY, [...items, { value: phone, label: cleanName(r.name) }]), f.sha,
+      "Allow " + phone + " (" + cleanName(r.name) + ") on the self-service cleanup page (approved by " + s.login + ")");
+  }
+  // 2. delete their test orders straight away
+  let since = r.since;
+  if (checkSince(since, ADMIN_MAX_DAYS)) since = new Date(Date.now() - 7 * 86400e3 + 5.5 * 3600e3).toISOString().slice(0, 10);
+  const id = requestId();
+  await dispatch(s.token, {
+    dry_run: "false",
+    since_date: since,
+    max_deletions: 100,
+    phone_numbers: phone,
+    self_service: "true",
+    requested_by: "Self-service: " + cleanName(r.name) + " (" + phone + ", approved by " + s.login + ")",
+    request_id: id,
+  });
+  // 3. close the request; the requester's page picks up the run from here
+  await closeRequest(s.token, n, "Approved by @" + s.login + ". Their test orders since " + since + " are being deleted.", { requestId: id }, "completed");
+  return send(res, 200, { requestId: id, ...(await requestsList(s)) });
+}
+
+async function requestsList(s) {
+  const open = await openRequests(s.token);
+  return { requests: open.map(({ issue, req: r }) => ({ issue: issue.number, name: r.name, phone: r.phone, since: r.since, at: r.at || issue.created_at, url: issue.html_url })) };
+}
+
+async function history(req, res, s) {
+  const runs = await listHistory(s.token, 40);
+  return send(res, 200, { history: runs });
 }

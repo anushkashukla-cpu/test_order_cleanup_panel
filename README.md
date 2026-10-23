@@ -4,8 +4,23 @@ Two pages, hosted on Vercel:
 
 | Page | Who | What |
 |---|---|---|
-| `/` | Anyone with the link, no login | Enter a phone number and a date: deletes that number's test orders placed since then, and shows what was deleted. Only numbers on the approved list work. |
-| `/admin` | People with **Write** access to the `Test_Orders_Cleanup` repo, signed in with GitHub | Automatic deletion on/off, how often it runs, preview the orders that would be deleted and delete them, manage approved numbers, recent runs. |
+| `/` | Anyone with the link, **no login** | Enter your name, phone number and a date: deletes that number's test orders placed since then, and shows what was deleted. The name and number are recorded as "who" in the history. A number used for the first time needs the admin's approval (one click to ask); once approved, the orders are deleted automatically. |
+| `/admin` | People with **Write** access to the `Test_Orders_Cleanup` repo, signed in with GitHub | Approval requests, automatic deletion on/off, how often it runs, preview the orders that would be deleted and delete them, approved numbers, deletion history (who deleted what, when), recent runs. |
+
+## Deletion history
+Every run that actually removes something saves a record (who, when, each
+order, Shopify or Zoho) as its own file on the repo's `history` branch. It's
+permanent, unlike run reports which GitHub keeps for 30 days. "Who" is the
+GitHub login for admin runs, "Schedule" for automatic runs, and the person's
+name and phone number they entered for self-service runs (plus who approved
+them, when approval was needed).
+
+## Approval requests
+A request is stored as a GitHub issue in `Test_Orders_Cleanup` (titled
+"Cleanup approval: …"). Approve or reject it on the admin page; the issue is
+closed for you. Because the website opens these issues with your own token,
+GitHub won't email you about them (it never notifies you of your own
+actions). Check the admin page; the Approval requests heading shows a count.
 
 Add someone as a collaborator on the repo and they get the admin page the next
 time they sign in. Remove them and they lose it.
@@ -30,8 +45,9 @@ tokens → **Fine-grained tokens** → Generate new token.
 
 - Resource owner: the account that owns `Test_Orders_Cleanup`
 - Repository access: **Only select repositories** → `Test_Orders_Cleanup`
-- Repository permissions: **Actions: Read and write**, **Contents: Read-only**
-  (Metadata read-only is added automatically)
+- Repository permissions: **Actions: Read and write**, **Contents: Read-only**,
+  **Issues: Read and write** (for approval requests). Metadata read-only is
+  added automatically.
 - Expiration: up to a year. Put a reminder in your calendar to renew it.
 
 Copy the token (starts with `github_pat_`).

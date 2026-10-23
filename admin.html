@@ -103,6 +103,11 @@
   .pill.fail { background: var(--danger-soft); color: var(--danger); }
   .pill.wait { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
   .empty { color: var(--muted); padding: 16px 0; display: block !important; }
+  .req { grid-template-columns: 1fr auto auto !important; }
+  .req .who { font-weight: 600; }
+  .req .who small { display: block; font-weight: 400; color: var(--muted); font-size: 14px; }
+  .count { display: inline-block; min-width: 24px; padding: 0 8px; margin-left: 8px; border-radius: 999px; background: var(--bolt); color: var(--bolt-ink); font-size: 14px; text-align: center; vertical-align: 2px; }
+  code { font-size: 14px; }
   .addrow { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
   .addrow input { flex: 1 1 180px; }
 
@@ -168,6 +173,12 @@
     </div>
     <div class="notice" id="notice" role="status" hidden></div>
 
+    <section id="requestsSection">
+      <h3 id="requestsTitle">Approval requests</h3>
+      <p class="hint">People who asked to delete their test orders with a number that isn't approved yet. Approving adds the number to the self-service list and deletes their test orders straight away.</p>
+      <ul class="list" id="requests"><li class="empty">Loading…</li></ul>
+    </section>
+
     <section>
       <h3>Preview and delete</h3>
       <p class="hint">Preview lists the test orders that would be deleted, using the name list and phone numbers in the repository. Check the list, then delete them in one click.</p>
@@ -197,6 +208,12 @@
         <input id="newLabel" type="text" placeholder="Whose number (e.g. Himanshu)" aria-label="Whose number">
         <button class="btn" id="addNumber" type="button">Add number</button>
       </div>
+    </section>
+
+    <section>
+      <h3>Deletion history</h3>
+      <p class="hint">Every order removed from Shopify or Zoho, who removed it, and when. Kept permanently in the repository (on the <code>history</code> branch).</p>
+      <div id="history"><p class="empty">Loading…</p></div>
     </section>
 
     <section>
@@ -336,7 +353,7 @@
     if (!me.access) { $("noaccessText").textContent = me.message; $("noaccess").hidden = false; return; }
     $("panel").hidden = false;
     $("since").max = istToday(); $("since").min = daysAgo(365); $("since").value = daysAgo(7);
-    loadSettings(); loadNumbers(); loadRuns();
+    loadSettings(); loadRequests(); loadNumbers(); loadHistory(); loadRuns();
   }
 
   // ---------- automatic deletion + schedule ----------
@@ -468,6 +485,64 @@
     finally { $("addNumber").disabled = false; }
   });
 
+  // ---------- approval requests ----------
+  function renderRequests(list) {
+    const ul = $("requests"); ul.textContent = "";
+    $("requestsTitle").textContent = "Approval requests";
+    if (list.length) $("requestsTitle").append(el("span", { class: "count", text: String(list.length) }));
+    if (!list.length) { ul.append(el("li", { class: "empty", text: "No requests waiting." })); return; }
+    for (const r of list) {
+      const approve = el("button", { class: "btn small primary", type: "button", text: "Approve & delete" });
+      const reject = el("button", { class: "btn small", type: "button", text: "Reject" });
+      const act = async (action) => {
+        if (action === "approve" && !(await confirmBox("Approve " + r.name + "?",
+          "This adds " + r.phone + " to the self-service list and permanently deletes its test orders placed since " + prettyDate(r.since) + " in Shopify and Zoho.",
+          "Approve & delete"))) return;
+        approve.disabled = reject.disabled = true;
+        try {
+          const res = await api("requests", { method: "POST", body: { action, issue: r.issue } });
+          renderRequests(res.requests);
+          if (action === "approve") { notify("Approved. Deleting " + r.name + "'s test orders now; it shows under Recent runs."); loadNumbers(); loadRuns(); }
+          else notify("Request from " + r.name + " rejected.");
+        } catch (e) { notify(e.message, true); approve.disabled = reject.disabled = false; loadRequests(); }
+      };
+      approve.addEventListener("click", () => act("approve"));
+      reject.addEventListener("click", () => act("reject"));
+      ul.append(el("li", { class: "req" },
+        el("span", { class: "who", text: r.name }, el("small", { text: r.phone + ", orders since " + prettyDate(r.since) + ", asked " + whenLabel(r.at) })),
+        reject, approve));
+    }
+  }
+  async function loadRequests() {
+    try { renderRequests((await api("requests")).requests); }
+    catch (e) { $("requests").textContent = ""; $("requests").append(el("li", { class: "empty", text: e.message })); }
+  }
+
+  // ---------- deletion history ----------
+  async function loadHistory() {
+    const box = $("history");
+    let data;
+    try { data = await api("history"); } catch (e) { box.textContent = ""; box.append(el("p", { class: "empty", text: e.message })); return; }
+    box.textContent = "";
+    const rows = [];
+    for (const h of data.history) for (const r of h.rows || []) rows.push({ h, r });
+    if (!rows.length) { box.append(el("p", { class: "empty", text: "Nothing deleted yet. Live runs that remove orders appear here." })); return; }
+    const table = el("table");
+    table.append(el("thead", {}, el("tr", {}, el("th", { text: "When" }), el("th", { text: "Who" }), el("th", { text: "Order" }),
+      el("th", { text: "Where" }), el("th", { text: "Customer" }), el("th", { text: "Result" }))));
+    const tb = el("tbody");
+    for (const { h, r } of rows) {
+      const [label, cls] = LABELS[r.action] || [r.action, ""];
+      const whoCell = el("td", {});
+      whoCell.append(h.run_url ? el("a", { href: h.run_url, target: "_blank", rel: "noopener", text: h.mode === "schedule" ? "Schedule (automatic)" : h.who }) : (h.mode === "schedule" ? "Schedule (automatic)" : h.who));
+      tb.append(el("tr", {}, el("td", { text: whenLabel(r.time || h.time) }), whoCell, el("td", { text: r.order_number || "–" }),
+        el("td", { text: SYSTEM[r.system] || r.system }), el("td", { text: r.customer || "" }), el("td", { class: cls, text: label })));
+    }
+    table.append(tb);
+    box.append(el("div", { class: "table-wrap" }, table));
+    box.append(el("p", { class: "empty", text: "Showing the latest " + data.history.length + " runs that deleted something." }));
+  }
+
   // ---------- recent runs ----------
   function pill(r) {
     if (r.status !== "completed") return el("span", { class: "pill wait", text: r.status === "queued" ? "Waiting" : "Running" });
@@ -503,6 +578,7 @@
     if (data.runs.some((r) => r.status !== "completed")) runsTimer = setTimeout(loadRuns, 10000);
   }
 
+  setInterval(() => { if (!$("panel").hidden) { loadRequests(); loadHistory(); } }, 60000);
   init();
 })();
 </script>

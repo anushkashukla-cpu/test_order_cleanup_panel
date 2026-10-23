@@ -1,5 +1,5 @@
 name: Test order cleanup
-run-name: ${{ github.event_name == 'schedule' && (vars.DRY_RUN == 'false' && 'Scheduled delete' || 'Scheduled preview') || format('{0} by {1}{2}', inputs.dry_run == 'false' && 'Delete' || 'Preview', inputs.requested_by || github.actor, inputs.request_id && format(' #{0}', inputs.request_id) || '') }}
+run-name: "${{ github.event_name == 'schedule' && (vars.DRY_RUN == 'false' && 'Scheduled delete' || 'Scheduled preview') || format('{0} by {1}{2}', inputs.dry_run == 'false' && 'Delete' || 'Preview', inputs.requested_by || github.actor, inputs.request_id && format(' #{0}', inputs.request_id) || '') }}"
 
 on:
   schedule:
@@ -42,7 +42,7 @@ on:
         default: ""
 
 permissions:
-  contents: read
+  contents: write   # to save the deletion history on the "history" branch
 
 # Scheduled runs never overlap each other. Runs started by people run in
 # parallel; deletes are safe to repeat, so two runs touching the same order
@@ -80,6 +80,8 @@ jobs:
           TEST_ACCOUNTS_FILE: config/test_accounts.yaml
           REPORT_FILE: report.csv
           REPORT_JSON: report.json
+          HISTORY_FILE: history.json
+          REQUESTED_BY: ${{ inputs.requested_by || github.actor }}
 
           # Shopify (Dev Dashboard app client ID + secret)
           SHOPIFY_STORE_DOMAIN: ${{ secrets.SHOPIFY_STORE_DOMAIN }}
@@ -94,6 +96,46 @@ jobs:
           # Only needed if your Zoho account is NOT on zoho.in:
           ZOHO_ACCOUNTS_URL: ${{ vars.ZOHO_ACCOUNTS_URL }}
           ZOHO_API_BASE_URL: ${{ vars.ZOHO_API_BASE_URL }}
+
+      - name: Save deletion history
+        if: always()
+        env:
+          REMOTE: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # Each live run that deleted something is saved as its own file on the
+          # "history" branch (shown on the admin page). Retries if another run
+          # saves at the same moment.
+          set -euo pipefail
+          [ -s history.json ] || { echo "Nothing was deleted, no history to save."; exit 0; }
+          src="$PWD/history.json"
+          file="history/$(date -u +%Y-%m)/$(date -u +%Y%m%dT%H%M%SZ)-${RUN_ID}.json"
+          work="$(mktemp -d)"
+          cd "$work"
+          git init -q
+          git config user.name "test-order-cleanup"
+          git config user.email "test-order-cleanup@users.noreply.github.com"
+          git remote add origin "$REMOTE"
+          for attempt in 1 2 3 4 5 6; do
+            if git fetch -q --depth 1 origin history 2>/dev/null; then
+              git checkout -q -B history FETCH_HEAD
+            else
+              git checkout -q --orphan history 2>/dev/null || git checkout -q history
+              git rm -rq --cached . 2>/dev/null || true
+            fi
+            mkdir -p "$(dirname "$file")"
+            cp "$src" "$file"
+            git add "$file"
+            git commit -q -m "History: run ${RUN_ID}"
+            if git push -q origin history 2>/dev/null; then
+              echo "Saved $file"
+              exit 0
+            fi
+            echo "Another run saved history at the same moment, retrying ($attempt)..."
+            sleep $(( (RANDOM % 4) + 1 ))
+          done
+          echo "Could not save history after several tries."
+          exit 1
 
       - name: Save report
         if: always()

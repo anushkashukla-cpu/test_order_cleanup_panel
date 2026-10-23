@@ -28,7 +28,11 @@ function reset() {
     },
     vars: {}, dispatches: [], puts: [], calls: [],
     perms: { "user-token": { push: true, admin: false }, "viewer-token": { push: false, pull: true } },
-    runs: [],
+    runs: [], issues: [], comments: {},
+    history: {
+      "history/2026-10/20261020T100000Z-1.json": { time: "2026-10-20T10:00:00Z", who: "Schedule", mode: "schedule", run_url: "u1", rows: [{ system: "zoho", order_number: "HR/26/1", action: "deleted" }] },
+      "history/2026-10/20261022T100000Z-2.json": { time: "2026-10-22T10:00:00Z", who: "anushka", mode: "admin", run_url: "u2", rows: [{ system: "shopify", order_number: "HR/26/2", action: "deleted" }] },
+    },
     zip: zipSync({ "report.json": strToU8(JSON.stringify({ dry_run: true, matched: 1, deleted: 1, failed: 0, rows: [{ system: "shopify", order_number: "HR/26/1", customer: "Dev <9876543210@home-run.co>", matched_name: "phone 9876543210", action: "would_delete" }] })) }),
   };
 }
@@ -46,6 +50,24 @@ global.fetch = async (url, opts = {}) => {
   if (path === BASE) {
     if (!(token in state.perms) && token !== "server-token") return J(401, { message: "Bad credentials" });
     return J(200, { permissions: state.perms[token] || { push: true } });
+  }
+  if (path === BASE + "/git/trees/history?recursive=1") {
+    if (state.noHistory) return J(404, { message: "Not Found" });
+    return J(200, { tree: [{ type: "tree", path: "history" }, ...Object.keys(state.history).map((p) => ({ type: "blob", path: p })), { type: "blob", path: "README.md" }] });
+  }
+  const hf = path.match(/\/contents\/(history\/.+)\?ref=history$/);
+  if (hf) return J(200, { content: Buffer.from(JSON.stringify(state.history[hf[1]])).toString("base64") });
+  if (path.startsWith(BASE + "/issues")) {
+    const m = path.match(/\/issues(?:\/(\d+))?(\/comments)?/);
+    const n = m[1] && Number(m[1]);
+    if (!n && method === "POST") { const i = { number: state.issues.length + 1, state: "open", title: body.title, body: body.body, html_url: "issue" + (state.issues.length + 1), created_at: "2026-10-23T10:00:00Z" }; state.issues.push(i); return J(201, i); }
+    if (!n) return J(200, [...state.issues.filter((i) => i.state === "open"), { number: 99, state: "open", body: "x", pull_request: {} }]);
+    const issue = state.issues.find((i) => i.number === n);
+    if (!issue) return J(404, { message: "Not Found" });
+    if (m[2] && method === "POST") { (state.comments[n] ||= []).push({ body: body.body }); return J(201, {}); }
+    if (m[2]) return J(200, state.comments[n] || []);
+    if (method === "PATCH") { Object.assign(issue, body); return J(200, issue); }
+    return J(200, issue);
   }
   const f = path.match(/\/contents\/(.+?)(\?ref=main)?$/);
   if (f) {
@@ -183,24 +205,27 @@ test("admin: approved numbers", async () => {
 
 test("public: approved number only, self-service run with server token", async () => {
   reset();
-  let r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { phone: "9123456789", since: since() } });
+  let r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { name: "Himanshu Sharma", phone: "9123456789", since: since() } });
   assert.equal(r.statusCode, 403);
   assert.match(r.json().error, /isn't approved/);
   assert.equal(state.dispatches.length, 0);
-  r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { phone: "98765", since: since() } });
+  r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { name: "Himanshu Sharma", phone: "98765", since: since() } });
   assert.equal(r.statusCode, 400);
-  r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { phone: "9876543210", since: "2020-01-01" } });
+  r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { name: "Himanshu Sharma", phone: "9876543210", since: "2020-01-01" } });
   assert.equal(r.statusCode, 400);
-  r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { phone: "1,2,3,4", since: since() } });
+  r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { name: "Himanshu Sharma", phone: "1,2,3,4", since: since() } });
   assert.equal(r.statusCode, 400);
-  r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { phone: "9876543210", since: since() }, origin: "https://evil.test" });
+  r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { name: "H", phone: "9876543210", since: since() } });
+  assert.equal(r.statusCode, 400, "name required");
+  assert.match(r.json().error, /name/);
+  r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { name: "Himanshu Sharma", phone: "9876543210", since: since() }, origin: "https://evil.test" });
   assert.equal(r.statusCode, 403);
-  r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { phone: "+91 98765 43210", since: since() } });
+  r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { name: "Himanshu Sharma", phone: "+91 98765 43210", since: since() } });
   assert.equal(r.statusCode, 200);
   const id = r.json().requestId;
   const d = state.dispatches.at(-1);
   assert.equal(d.token, "server-token");
-  assert.deepEqual(d.inputs, { dry_run: "false", since_date: since(), max_deletions: "100", phone_numbers: "9876543210", self_service: "true", requested_by: "Self-service", request_id: id });
+  assert.deepEqual(d.inputs, { dry_run: "false", since_date: since(), max_deletions: "100", phone_numbers: "9876543210", self_service: "true", requested_by: "Self-service: Himanshu Sharma (9876543210)", request_id: id });
 
   r = await call(pub, { url: "/api/public?a=status&request=" + id });
   assert.equal(r.json().state, "queued");
@@ -221,7 +246,7 @@ test("public: approved number only, self-service run with server token", async (
 test("public: busy limit", async () => {
   reset();
   state.runs = [1, 2, 3].map((i) => ({ id: i, display_title: "Delete by Self-service #00000000000" + i, status: "in_progress" }));
-  const r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { phone: "9876543210", since: since() } });
+  const r = await call(pub, { method: "POST", url: "/api/public?a=delete", body: { name: "Himanshu Sharma", phone: "9876543210", since: since() } });
   assert.equal(r.statusCode, 429);
 });
 
@@ -248,4 +273,89 @@ test("auth: login, callback with state check, logout", async () => {
   r = await call(auth, { url: "/api/auth?a=logout" });
   assert.equal(r.headers.location, "/admin");
   assert.ok([].concat(r.headers["set-cookie"]).some((c) => c.startsWith("toc_session=;") && c.includes("Max-Age=0")));
+});
+
+test("approval request: ask, pending, approve -> number added + run started, requester sees it", async () => {
+  reset();
+  // validation
+  let r = await call(pub, { method: "POST", url: "/api/public?a=request", body: { phone: "9123456789", name: "P", since: since() } });
+  assert.equal(r.statusCode, 400, "name required");
+  r = await call(pub, { method: "POST", url: "/api/public?a=request", body: { phone: "9123456789, 9123456780", name: "Priya", since: since() } });
+  assert.equal(r.statusCode, 400, "one number");
+  r = await call(pub, { method: "POST", url: "/api/public?a=request", body: { phone: "9876543210", name: "Him", since: since() } });
+  assert.equal(r.statusCode, 409, "already approved");
+  r = await call(pub, { method: "POST", url: "/api/public?a=request", body: { phone: "9123456789", name: "Priydarshi <script>", since: since() }, origin: "https://evil.test" });
+  assert.equal(r.statusCode, 403);
+  // create
+  r = await call(pub, { method: "POST", url: "/api/public?a=request", body: { phone: "+91 91234 56789", name: "Priydarshi <script>", since: since() } });
+  assert.equal(r.statusCode, 200);
+  const aid = r.json().approvalId;
+  assert.match(aid, /^1-[0-9a-f]{16}$/);
+  assert.equal(state.issues[0].title, "Cleanup approval: Priydarshi script (9123456789)");
+  assert.match(state.issues[0].body, /https:\/\/panel\.test\/admin/);
+  // same number again -> same request
+  r = await call(pub, { method: "POST", url: "/api/public?a=request", body: { phone: "9123456789", name: "Priydarshi", since: since() } });
+  assert.equal(r.json().approvalId, aid);
+  assert.equal(state.issues.length, 1);
+  // status: pending; wrong token -> 404
+  r = await call(pub, { url: "/api/public?a=approval&id=" + aid });
+  assert.equal(r.json().state, "pending");
+  r = await call(pub, { url: "/api/public?a=approval&id=1-0000000000000000" });
+  assert.equal(r.statusCode, 404);
+  r = await call(pub, { url: "/api/public?a=approval&id=../1" });
+  assert.equal(r.statusCode, 400);
+  // admin sees it (PRs and other issues ignored)
+  r = await call(admin, { url: "/api/admin?a=requests", cookie: sess() });
+  assert.deepEqual(r.json().requests.map((x) => [x.issue, x.name, x.phone]), [[1, "Priydarshi script", "9123456789"]]);
+  // viewer can't approve
+  r = await call(admin, { method: "POST", url: "/api/admin?a=requests", cookie: sess("viewer-token"), body: { action: "approve", issue: 1 } });
+  assert.equal(r.statusCode, 403);
+  // approve
+  r = await call(admin, { method: "POST", url: "/api/admin?a=requests", cookie: sess(), body: { action: "approve", issue: 1 } });
+  assert.equal(r.statusCode, 200);
+  const runId = r.json().requestId;
+  assert.deepEqual(r.json().requests, []);
+  const yaml = state.files["config/test_accounts.yaml"];
+  assert.deepEqual(readList(yaml, "self_service_phone_numbers").map((x) => x.value), ["9876543210", "9123456789"]);
+  assert.match(state.puts.at(-1).message, /Allow 9123456789 \(Priydarshi script\).*approved by anushka/);
+  const d = state.dispatches.at(-1);
+  assert.equal(d.token, "user-token");
+  assert.deepEqual(d.inputs, { dry_run: "false", since_date: since(), max_deletions: "100", phone_numbers: "9123456789", self_service: "true", requested_by: "Self-service: Priydarshi script (9123456789, approved by anushka)", request_id: runId });
+  assert.equal(state.issues[0].state, "closed");
+  assert.equal(state.issues[0].state_reason, "completed");
+  // requester's page now gets the run id and can follow it
+  r = await call(pub, { url: "/api/public?a=approval&id=" + aid });
+  assert.deepEqual(r.json(), { state: "approved", requestId: runId, phone: "9123456789" });
+  state.runs = [{ id: 8, display_title: "Delete by Self-service: Priydarshi script (9123456789, approved by anushka) #" + runId, status: "in_progress" }];
+  r = await call(pub, { url: "/api/public?a=status&request=" + runId });
+  assert.equal(r.json().state, "running");
+  // handled twice -> 409
+  r = await call(admin, { method: "POST", url: "/api/admin?a=requests", cookie: sess(), body: { action: "approve", issue: 1 } });
+  assert.equal(r.statusCode, 409);
+});
+
+test("approval request: reject", async () => {
+  reset();
+  let r = await call(pub, { method: "POST", url: "/api/public?a=request", body: { phone: "9123456789", name: "Someone", since: since() } });
+  const aid = r.json().approvalId;
+  r = await call(admin, { method: "POST", url: "/api/admin?a=requests", cookie: sess(), body: { action: "reject", issue: 1 } });
+  assert.deepEqual(r.json().requests, []);
+  assert.equal(state.issues[0].state_reason, "not_planned");
+  assert.equal(state.dispatches.length, 0);
+  assert.equal(readList(state.files["config/test_accounts.yaml"], "self_service_phone_numbers").length, 1);
+  r = await call(pub, { url: "/api/public?a=approval&id=" + aid });
+  assert.equal(r.json().state, "rejected");
+  r = await call(admin, { method: "POST", url: "/api/admin?a=requests", cookie: sess(), body: { action: "approve", issue: 42 } });
+  assert.equal(r.statusCode, 404);
+});
+
+test("history: newest first, empty when no branch", async () => {
+  reset();
+  let r = await call(admin, { url: "/api/admin?a=history", cookie: sess() });
+  assert.deepEqual(r.json().history.map((h) => h.who), ["anushka", "Schedule"]);
+  state.noHistory = true;
+  r = await call(admin, { url: "/api/admin?a=history", cookie: sess() });
+  assert.deepEqual(r.json().history, []);
+  r = await call(admin, { url: "/api/admin?a=history" });
+  assert.equal(r.statusCode, 401);
 });
