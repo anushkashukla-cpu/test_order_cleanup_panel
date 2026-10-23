@@ -1,0 +1,34 @@
+# Test accounts whose orders are deleted from Shopify and Zoho Inventory.
+# Edit this file on GitHub (pencil icon), then "Commit changes".
+# The next run picks up the change. Do a dry run first after any change.
+
+# 1) CUSTOMER NAMES
+# Exact match on the full name (capital letters and extra spaces ignored).
+# "Test" matches "test", but NOT "Testa Sharma" or "Celeste".
+test_customer_names:
+  - "Testing Homerun"
+  - "Test"
+  - "Anushka_test"
+  - "Hamza Test"
+  - "Faizan Test user"
+  - "Test Test test test"
+  - "Minhad Rizwan test"
+  - "Testrik Roy"
+  - "Test priydarshi Test"
+  - "Test-himanshu Sharma"
+  - "Test-nagendra Mohan"
+
+# 2) PHONE NUMBERS (developers / testers)
+# Any Shopify order placed from one of these numbers is deleted, whatever the
+# customer name. Add your 10-digit number while you are testing and REMOVE it
+# when you are done, otherwise your real personal orders would be deleted too.
+# Formats like +91 90589 39421 or 09058939421 are fine.
+# Example (remove the # at the start of a line to turn it on):
+#   - "9876543210"   # Your name, testing until DD/MM
+test_phone_numbers:
+
+# 3) SELF-SERVICE PHONE NUMBERS (for the public "delete my test orders" page)
+# Numbers allowed on the public page. Only orders from the number typed in are
+# deleted there, and only when it is on this list. Scheduled runs never use
+# this list. Manage it from the admin page, or edit here.
+self_service_phone_numbers:

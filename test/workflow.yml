@@ -1,0 +1,107 @@
+name: Test order cleanup
+run-name: ${{ github.event_name == 'schedule' && (vars.DRY_RUN == 'false' && 'Scheduled delete' || 'Scheduled preview') || format('{0} by {1}{2}', inputs.dry_run == 'false' && 'Delete' || 'Preview', inputs.requested_by || github.actor, inputs.request_id && format(' #{0}', inputs.request_id) || '') }}
+
+on:
+  schedule:
+    # How often it runs. The control panel changes the cron line for you.
+    # Example: "17 */2 * * *" runs every 2 hours at :17 UTC. GitHub may start a few minutes late.
+    - cron: "17 */2 * * *"
+  workflow_dispatch:       # "Run workflow" button, and what the control panel website calls
+    inputs:
+      dry_run:
+        description: "Dry run (true = only report, delete nothing)"
+        type: choice
+        options: ["true", "false"]
+        default: "true"
+      since_date:
+        description: "Clean orders placed since this date (YYYY-MM-DD). Leave empty to use days back."
+        required: false
+        default: ""
+      lookback_days:
+        description: "How many days back to look (used when no date is given)"
+        default: "7"
+      max_deletions:
+        description: "Stop after this many orders"
+        default: "50"
+      phone_numbers:
+        description: "Test phone numbers for THIS run only (comma-separated, e.g. 9876543210, 9123456789)"
+        required: false
+        default: ""
+      self_service:
+        description: "Self-service run from the public page (only the numbers above, must be approved)"
+        type: choice
+        options: ["false", "true"]
+        default: "false"
+      requested_by:
+        description: "Shown in the run name (set by the website)"
+        required: false
+        default: ""
+      request_id:
+        description: "Lets the website find this run (set by the website)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# Scheduled runs never overlap each other. Runs started by people run in
+# parallel; deletes are safe to repeat, so two runs touching the same order
+# don't fail.
+concurrency:
+  group: ${{ github.event_name == 'schedule' && 'test-order-cleanup-schedule' || format('test-order-cleanup-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Clean up test orders
+        run: go run ./cmd/cleanup
+        env:
+          # Safety switches. Scheduled runs use the repo variables
+          # (Settings > Secrets and variables > Actions > Variables).
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || vars.DRY_RUN || 'true' }}
+          SINCE_DATE: ${{ inputs.since_date }}
+          LOOKBACK_DAYS: ${{ inputs.lookback_days || vars.LOOKBACK_DAYS || '7' }}
+          MAX_DELETIONS_PER_RUN: ${{ inputs.max_deletions || vars.MAX_DELETIONS_PER_RUN || '50' }}
+          SELF_SERVICE: ${{ inputs.self_service || 'false' }}
+          EXTRA_TEST_PHONES: ${{ inputs.phone_numbers }}
+          ZOHO_FIRST: ${{ vars.ZOHO_FIRST || 'true' }}
+          TEST_ACCOUNTS_FILE: config/test_accounts.yaml
+          REPORT_FILE: report.csv
+          REPORT_JSON: report.json
+
+          # Shopify (Dev Dashboard app client ID + secret)
+          SHOPIFY_STORE_DOMAIN: ${{ secrets.SHOPIFY_STORE_DOMAIN }}
+          SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+
+          # Zoho Inventory
+          ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
+          ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
+          ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+          ZOHO_ORG_ID: ${{ secrets.ZOHO_ORG_ID }}
+          # Only needed if your Zoho account is NOT on zoho.in:
+          ZOHO_ACCOUNTS_URL: ${{ vars.ZOHO_ACCOUNTS_URL }}
+          ZOHO_API_BASE_URL: ${{ vars.ZOHO_API_BASE_URL }}
+
+      - name: Save report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report
+          path: |
+            report.csv
+            report.json
+          if-no-files-found: ignore
+          retention-days: 30
